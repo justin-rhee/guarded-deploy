@@ -2,7 +2,9 @@
 
 [![tests](https://github.com/justin-rhee/guarded-deploy/actions/workflows/test.yml/badge.svg)](https://github.com/justin-rhee/guarded-deploy/actions/workflows/test.yml)
 
-My deploy script checked the tree was clean, ran the tests, then shipped whatever was on disk when I finished typing the confirmation. Not the thing it had checked, the thing that was there after minutes of tests, which is plenty of time for a build step or a parallel agent to touch the tree.
+My deploy script shipped a file the tests had never run against. I only caught it because I happened to be testing the deploy script itself that day.
+
+The clean-tree check had passed a few minutes before, and somewhere in between, the gate touched a file. That's all it takes. A build step, a formatter, an agent working in another session, and the thing ships what's on disk rather than what it checked. If your deploy script checks the tree before it runs your tests, it's telling you about a tree that's already gone.
 
 So this is that wrapper: about 200 lines of bash that ships only from a clean tree, on the exact commit that just passed your checks.
 
@@ -24,7 +26,7 @@ Three guards wrap around that, in this order:
 - your gate command exits 0, whatever your gate is
 - HEAD gets an annotated `deploy-<utc>` tag, created only once the deploy succeeds, then pushed
 
-The tag waits for exit 0 so a failed deploy never leaves a marker claiming it shipped, and it gets pushed because a tag that only exists on your laptop isn't a rollback plan the day the laptop is the problem.
+The tag waits for exit 0 so a failed deploy never leaves a marker claiming it shipped, and it gets pushed because a tag that only exists on your laptop isn't a rollback plan the day the laptop is the problem
 
 The fourth guard is for state that isn't in your commit: feature switches, spend limits, whatever the service reads at runtime. A limit set in the wrong unit is silently ignored and the service falls back to its own default, so nothing errors and the number in force isn't the number you set. A preflight command of your choosing runs before anything ships, and if it can't answer, nothing ships.
 
@@ -92,7 +94,7 @@ It can't tell whether your gate is any good. A gate of `true` passes every time 
 
 It's a door, not a wall. Nothing stops anyone running the deploy command directly, it doesn't cover that command reachable from a CI job or a browser tab, and anyone who can run the wrapper can set `GD_GATE_CMD` to `true`. It guards against mistakes, not against someone who has decided to skip it. `--yes` gives up the human half the same way: a job running with it keeps the git guards, the gate and the preflight, and asks nobody for confirmation.
 
-One deploy command, one target. No environment matrix, no staging and production pair, no per branch policy. It also calls the tag pushed when the push command exits 0, without checking the remote afterwards.
+It assumes one deploy command going to one place, so there's no environment matrix and no staging-and-production pair, and nothing that varies by branch. It also calls the tag pushed when the push command exits 0, without checking the remote afterwards.
 
 It needs `git tag --points-at`, which the documentation carries back to 2.12; I've run it on 2.50. POSIX shell only, never run on Windows.
 
@@ -120,4 +122,4 @@ MIT, see [LICENSE](LICENSE). No warranty. Security posture and how to report a p
 
 Design decisions and what changed while building it: [docs/ADR.md](docs/ADR.md).
 
-One of a set of small tools I've pulled out of a bigger system I run, where agents write the code and plain scripts decide when it's actually done. They all share one rule: the machine suggests, a person decides, and nothing quietly goes wrong behind your back. More of them on my [GitHub profile](https://github.com/justin-rhee).
+One of a set of small tools I've pulled out of a bigger system I run, where agents write the code and plain scripts decide when it's actually done. I keep the final call for myself, and I'd rather a check be annoying than silent. More of them on my [GitHub profile](https://github.com/justin-rhee).
