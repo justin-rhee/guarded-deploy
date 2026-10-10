@@ -1,12 +1,8 @@
 # guarded-deploy
 
-[![tests](https://github.com/justin-rhee/guarded-deploy/actions/workflows/test.yml/badge.svg)](https://github.com/justin-rhee/guarded-deploy/actions/workflows/test.yml)
+One bash wrapper for deploy scripts: **re-check the tree is clean and HEAD is the exact gated commit immediately before anything ships**, **refuse loudly and say which one moved when either changed**, and **create and push a `deploy-<utc>` tag only once the deploy has succeeded**. About 200 lines of POSIX bash, and everything it calls is already on your machine.
 
-My deploy script shipped a file the tests had never run against. I only caught it because I happened to be testing the deploy script itself that day.
-
-The clean-tree check had passed a few minutes before, and somewhere in between, the gate touched a file. That's all it takes. A build step, a formatter, an agent working in another session, and the thing ships what's on disk rather than what it checked. If your deploy script checks the tree before it runs your tests, it's telling you about a tree that's already gone.
-
-So this is that wrapper: about 200 lines of bash that ships only from a clean tree, on the exact commit that just passed your checks.
+It exists because my deploy script shipped a file the tests had never run against, and I only caught it because I happened to be testing the deploy script itself that day. The clean-tree check had passed a few minutes earlier, and somewhere in between the gate touched a file; a build step, a formatter, an agent working in another session, and the thing ships what's on disk rather than what it checked. If your deploy script checks the tree before it runs your tests, it's telling you about a tree that's already gone.
 
 ## Use it if
 
@@ -16,21 +12,13 @@ So this is that wrapper: about 200 lines of bash that ships only from a clean tr
 
 ## How it works
 
-Nothing to install; everything it calls is already on your machine.
-
-Right before your deploy command runs, it looks one more time: is the tree still clean, and is HEAD still the exact commit the gate passed? That second question is about the commit the gate actually ran against, not the one you asked for, because those can quietly stop being the same thing. If either answer changed, nothing ships, and it tells you which one moved.
-
-Three guards wrap around that, in this order:
+Right before your deploy command runs, it looks one more time: is the tree still clean, and is HEAD still the exact commit the gate passed? That second question is about the commit the gate actually ran against, not the one you asked for, because those can quietly stop being the same thing. Three guards wrap around that, in this order:
 
 - the work tree is clean, checked first so a dirty tree costs you a second instead of a full test run
 - your gate command exits 0, whatever your gate is
-- HEAD gets an annotated `deploy-<utc>` tag, created only once the deploy succeeds, then pushed
+- HEAD gets an annotated `deploy-<utc>` tag, created only once the deploy succeeds, then pushed; the tag waits for exit 0 so a failed deploy never leaves a marker claiming it shipped, and it gets pushed because a tag that only exists on your laptop isn't a rollback plan the day the laptop is the problem
 
-The tag waits for exit 0 so a failed deploy never leaves a marker claiming it shipped, and it gets pushed because a tag that only exists on your laptop isn't a rollback plan the day the laptop is the problem
-
-The fourth guard is for state that isn't in your commit: feature switches, spend limits, whatever the service reads at runtime. A limit set in the wrong unit is silently ignored and the service falls back to its own default, so nothing errors and the number in force isn't the number you set. A preflight command of your choosing runs before anything ships, and if it can't answer, nothing ships.
-
-The preflight is your command and this wrapper never reads its output; whatever it prints goes to your terminal and nowhere else. The first version dumped the whole production environment into a shell variable to read settings, which left every secret in it one `set -x` from a log file. If the preflight wants something acknowledged, it writes one word into a file it's handed, and that word is what you type.
+The fourth guard is for state that isn't in your commit: feature switches, spend limits, whatever the service reads at runtime. A limit set in the wrong unit is silently ignored and the service falls back to its own default, so nothing errors and the number in force isn't the number you set. A preflight command of your choosing runs before anything ships, and if it can't answer, nothing ships. The preflight is your command and this wrapper never reads its output; whatever it prints goes to your terminal and nowhere else. The first version dumped the whole production environment into a shell variable to read settings, which left every secret in it one `set -x` from a log file. If the preflight wants something acknowledged, it writes one word into a file it's handed, and that word is what you type.
 
 What a refusal looks like, from a gate that leaves a build stamp behind:
 
@@ -49,16 +37,6 @@ guarded-deploy: deploy  ./ship.sh  (in the repo root)
 guarded-deploy: BLOCKED: the working tree went dirty after the gate ran. Nothing shipped. Commit or stash, then run this again so the gate covers what you are deploying.
 ```
 
-## Try it before you install it
-
-Point it at your own repo without letting it near anything real. `--dry-run` runs every guard and then stops, so the deploy command is never used. Run this from inside a repo of yours, with the path to the copy you just downloaded.
-
-```sh
-GD_GATE_CMD="make check" GD_DEPLOY_CMD="echo would deploy" bash ~/guarded-deploy/src/guarded-deploy.sh --dry-run
-```
-
-Run it once with an uncommitted file lying around to see it refuse.
-
 ## Install
 
 Copy `src/guarded-deploy.sh` into your repo, make it executable, and configure it through the environment.
@@ -71,15 +49,12 @@ Copy `src/guarded-deploy.sh` into your repo, make it executable, and configure i
 | `GD_PREFLIGHT_CMD` | runs before anything ships, in `GD_DEPLOY_DIR`. Optional. |
 | `GD_TAG_PUSH_CMD` | defaults to `git push origin`, and receives the tag as an argument. |
 
-There's no default gate and no default deploy command, and it refuses to run without both. A gate you didn't choose isn't a gate.
+There's no default gate and no default deploy command, and it refuses to run without both; a gate you didn't choose isn't a gate. Keep the settings in a small script in the repo, so they get reviewed like anything else instead of living in one person's shell history.
 
-Keep the settings in a small script in the repo, so they get reviewed like anything else instead of living in one person's shell history. A preflight that wants an acknowledgement writes one word into the file it's handed, and picking a word that changes with the state you'd most regret ignoring means typing it proves you read that line:
+Point it at your own repo without letting it near anything real: `--dry-run` runs every guard and then stops, so the deploy command is never used.
 
 ```sh
-#!/bin/sh
-echo "  autoplay      $(fetch-setting autoplay)"
-echo "  daily limit   $(fetch-setting daily_limit)"
-printf '%s' "$(fetch-setting autoplay)" > "$GD_ACK_FILE"
+GD_GATE_CMD="make check" GD_DEPLOY_CMD="echo would deploy" bash ~/guarded-deploy/src/guarded-deploy.sh --dry-run
 ```
 
 You know it's in place when `--dry-run` ends with "every guard passed" and a dirty tree stops in about a second with `BLOCKED`. `--yes` skips both typed confirmations and keeps every other guard, which is what a scheduled job should use.
@@ -118,8 +93,6 @@ Run on macOS with bash 3.2.57 and git 2.50.1, so the suite avoids associative ar
 
 ## License
 
-MIT, see [LICENSE](LICENSE). No warranty. Security posture and how to report a problem: [SECURITY.md](SECURITY.md).
+MIT, see [LICENSE](LICENSE). No warranty. Security posture and how to report a problem: [SECURITY.md](SECURITY.md). Design decisions and what changed while building it: [docs/ADR.md](docs/ADR.md).
 
-Design decisions and what changed while building it: [docs/ADR.md](docs/ADR.md).
-
-This little tool is one of a handful I pulled out of my own day-to-day agent setup. I use them all myself, so when something breaks I usually notice fast. But if you run into any issues, or anything that looks off, open an issue. I read every one. More tools on my [GitHub profile](https://github.com/justin-rhee).
+This little tool is one of a handful I pulled out of my own day-to-day agent setup. I use them all myself, so when something breaks I usually notice fast. If you spot anything off, open an issue. I read every one. More tools on my [GitHub profile](https://github.com/justin-rhee).
